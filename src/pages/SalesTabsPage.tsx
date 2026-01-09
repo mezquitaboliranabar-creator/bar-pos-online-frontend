@@ -79,6 +79,15 @@ type Payment = {
   reference?: string;
 };
 
+/* Línea de pago en el modal */
+type PayLine = {
+  id: string;
+  method: PayMethod;
+  amountStr: string;
+  provider: TransferProvider;
+  reference: string;
+};
+
 type ConfirmKind =
   | "OPEN_SLOT"
   | "CLOSE_TAB_ONLY"
@@ -502,10 +511,7 @@ export default function SalesTabsPage() {
   const [detailModalAddedAt, setDetailModalAddedAt] = useState<string>("");
 
   const [confirmSaleOpen, setConfirmSaleOpen] = useState(false);
-  const [payCashStr, setPayCashStr] = useState("");
-  const [payCardStr, setPayCardStr] = useState("");
-  const [payTransferStr, setPayTransferStr] = useState("");
-  const [payProvider, setPayProvider] = useState<TransferProvider>("NEQUI");
+  const [payLines, setPayLines] = useState<PayLine[]>([]);
   const [saleNotes, setSaleNotes] = useState("");
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -520,6 +526,19 @@ export default function SalesTabsPage() {
   const [cocktailAvail, setCocktailAvail] = useState<Record<string, number>>({});
   const recipeCache = useRef<Record<string, RecipeItem[]>>({});
   const [reservedAllOpen, setReservedAllOpen] = useState<Map<string, number>>(new Map());
+
+  /* ================= Helper pagos ================= */
+  const makePayLine = (partial?: Partial<PayLine>): PayLine => {
+    const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    return {
+      id,
+      method: "CASH",
+      amountStr: "",
+      provider: "NEQUI",
+      reference: "",
+      ...(partial || {}),
+    };
+  };
 
   /* ================= Styling ================= */
   const css = useMemo(() => {
@@ -1027,6 +1046,37 @@ export default function SalesTabsPage() {
         }
       }
 
+      /* Layout filas de pago */
+      .payRow{
+        display:grid;
+        grid-template-columns: 160px minmax(0,1fr) minmax(0,1fr) 110px;
+        gap:12px;
+        align-items:end;
+      }
+      @media (max-width: 780px){
+        .payRow{ grid-template-columns: 1fr; }
+      }
+      .payRefRow{
+        display:flex;
+        gap:10px;
+        align-items:center;
+      }
+      @media (max-width: 780px){
+        .payRefRow{
+          flex-direction:column;
+          align-items:stretch;
+        }
+      }
+      .payCards{
+        margin-top:12px;
+        display:grid;
+        grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+        gap:12px;
+      }
+      @media (max-width: 780px){
+        .payCards{ grid-template-columns: 1fr; }
+      }
+
       @media (max-width: 520px){
         input, select, button { font-size:16px; }
       }
@@ -1144,7 +1194,12 @@ export default function SalesTabsPage() {
           x?.tab?.openedAt ??
           new Date().toISOString()
       ),
-      closed_at: x?.closed_at ?? x?.closedAt ?? x?.tab?.closed_at ?? x?.tab?.closedAt ?? null,
+      closed_at:
+        x?.closed_at ??
+        x?.closedAt ??
+        x?.tab?.closed_at ??
+        x?.tab?.closedAt ??
+        null,
       items,
       totals: x?.totals
         ? {
@@ -1180,10 +1235,34 @@ export default function SalesTabsPage() {
 
     const invDisc = Math.max(0, Math.round(toNum(invoiceDiscountStr, 0)));
     const invIva =
-      invoiceIVAStr.trim() === "" ? null : Math.max(0, Math.round(toNum(invoiceIVAStr, 0)));
+      invoiceIVAStr.trim() === ""
+        ? null
+        : Math.max(0, Math.round(toNum(invoiceIVAStr, 0)));
 
     return computeTabTotalsWithInvoiceAdjust(selected, invDisc, invIva);
   }, [selected, invoiceDiscountStr, invoiceIVAStr]);
+
+  /* Pagado y cambio del modal */
+  const payPreview = useMemo(() => {
+    const due = Math.max(0, Math.round(toNum(selectedTotals.total, 0)));
+    const paid = (payLines || []).reduce((s, ln) => {
+      const amt = Math.max(0, Math.round(toNum(ln.amountStr, 0)));
+      return s + amt;
+    }, 0);
+    const change = Math.max(0, paid - due);
+    return { due, paid, change };
+  }, [payLines, selectedTotals.total]);
+
+  /* Inicializa una línea de pago al abrir el modal */
+  useEffect(() => {
+    if (!confirmSaleOpen) return;
+    setPayLines((prev) => {
+      if (prev.length) return prev;
+      const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      const t = Math.max(0, Math.round(toNum(selectedTotals.total, 0)));
+      return [{ id, method: "CASH", amountStr: String(t), provider: "NEQUI", reference: "" }];
+    });
+  }, [confirmSaleOpen, selectedTotals.total]);
 
   useEffect(() => {
     setInvoiceAdjOpen(false);
@@ -1198,7 +1277,10 @@ export default function SalesTabsPage() {
       .filter((p) => (pcat ? p.category === pcat : true))
       .filter((p) => {
         if (!q) return true;
-        return p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q);
+        return (
+          p.name.toLowerCase().includes(q) ||
+          p.category.toLowerCase().includes(q)
+        );
       })
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [products, pq, pcat]);
@@ -1264,7 +1346,12 @@ export default function SalesTabsPage() {
         if (t.id !== tabId) return t;
         const items = (t.items || []).map((curr) => {
           if (curr.id !== itemId) return curr;
-          const local = calcLineLocal(qty, curr.unit_price, curr.line_discount, curr.tax_rate);
+          const local = calcLineLocal(
+            qty,
+            curr.unit_price,
+            curr.line_discount,
+            curr.tax_rate
+          );
           return { ...curr, qty, tax_amount: local.tax_amount, line_total: local.line_total };
         });
         return { ...t, items };
@@ -1361,7 +1448,11 @@ export default function SalesTabsPage() {
     const extraTotals = (r as any).totals ?? null;
 
     const merged = baseTab
-      ? { ...baseTab, ...(extraItems ? { items: extraItems } : null), ...(extraTotals ? { totals: extraTotals } : null) }
+      ? {
+          ...baseTab,
+          ...(extraItems ? { items: extraItems } : null),
+          ...(extraTotals ? { totals: extraTotals } : null),
+        }
       : extraItems
       ? { ...(r as any), items: extraItems }
       : (r as any);
@@ -1394,7 +1485,10 @@ export default function SalesTabsPage() {
 
   /* ================= Unit conversions ================= */
   const stockCanonical = (p: Product): number => {
-    const v = p.stock_available !== undefined ? toNum(p.stock_available, 0) : toNum(p.stock, 0);
+    const v =
+      p.stock_available !== undefined
+        ? toNum(p.stock_available, 0)
+        : toNum(p.stock, 0);
     return Math.max(0, v);
   };
 
@@ -1499,6 +1593,7 @@ export default function SalesTabsPage() {
       await recomputeCocktailAvail(catalog);
     })();
   }, [productsById, products]);
+
   /* ================= Header actions ================= */
   const onGoHome = () => {
     nav("/dashboard");
@@ -1769,7 +1864,9 @@ export default function SalesTabsPage() {
       patchSelected(
         (t) => {
           if (t.id !== tabId) return t;
-          const items = (t.items || []).map((curr) => (curr.id === itemId ? norm : curr));
+          const items = (t.items || []).map((curr) =>
+            curr.id === itemId ? norm : curr
+          );
           return { ...t, items };
         },
         tabId
@@ -1887,7 +1984,10 @@ export default function SalesTabsPage() {
     const rawItem = (r as any).item ?? (r as any).data ?? null;
     if (rawItem) {
       const it = normalizeTabItem(rawItem);
-      patchSelected((t) => ({ ...t, items: [...(t.items || []), it] }), selected.id);
+      patchSelected(
+        (t) => ({ ...t, items: [...(t.items || []), it] }),
+        selected.id
+      );
       setQtyDrafts((prev) => ({ ...prev, [it.id]: String(it.qty) }));
       lastQtySent.current[it.id] = it.qty;
     } else {
@@ -1907,7 +2007,8 @@ export default function SalesTabsPage() {
       })
       .sort(
         (a, b) =>
-          new Date(b.closed_at || b.opened_at).getTime() - new Date(a.closed_at || a.opened_at).getTime()
+          new Date(b.closed_at || b.opened_at).getTime() -
+          new Date(a.closed_at || a.opened_at).getTime()
       );
   }, [tabsClosed, placeType]);
 
@@ -1950,7 +2051,10 @@ export default function SalesTabsPage() {
       } else if (confirm.kind === "CLEAR_TAB") {
         await doClearTab(String(confirm.payload?.tabId || ""));
       } else if (confirm.kind === "REMOVE_ITEM") {
-        await doRemoveItem(String(confirm.payload?.tabId || ""), String(confirm.payload?.itemId || ""));
+        await doRemoveItem(
+          String(confirm.payload?.tabId || ""),
+          String(confirm.payload?.itemId || "")
+        );
       } else if (confirm.kind === "REOPEN_TAB") {
         await doReopen(String(confirm.payload?.tabId || ""));
       }
@@ -2047,7 +2151,6 @@ export default function SalesTabsPage() {
             <b>Cargando...</b>
           </div>
         ) : null}
-
         {!loading && uiView === "MAP" ? (
           <div className="card cardfx">
             <div className="card-hd">
@@ -2310,6 +2413,7 @@ export default function SalesTabsPage() {
                   )}
                 </div>
               </div>
+
               <div className="card cardfx totals">
                 <div className="totals-list">
                   <div>
@@ -2355,14 +2459,13 @@ export default function SalesTabsPage() {
                   <button className="btn btn-animate" type="button" onClick={requestClearTab} disabled={!selected || selected.status !== "OPEN"}>
                     Vaciar
                   </button>
+
                   <button
                     className="btn btn-primary btn-animate"
                     type="button"
                     onClick={() => {
-                      const t = selectedTotals.total || 0;
-                      setPayCashStr(String(Math.max(0, Math.round(t))));
-                      setPayCardStr("");
-                      setPayTransferStr("");
+                      const t = Math.max(0, Math.round(toNum(selectedTotals.total, 0)));
+                      setPayLines([makePayLine({ method: "CASH", amountStr: String(t) })]);
                       setSaleNotes("");
                       setConfirmSaleOpen(true);
                     }}
@@ -2512,7 +2615,6 @@ export default function SalesTabsPage() {
             </div>
           </div>
         ) : null}
-
         {/* ================= Modal Descuento / IVA ================= */}
         {discountModalItem && selected ? (
           <div
@@ -2676,69 +2778,92 @@ export default function SalesTabsPage() {
         ) : null}
 
         {/* ================= Modal Ver detalles (receta) ================= */}
-        {detailModalProduct ? (
-          <div
+{detailModalProduct ? (
+  <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      background: "rgba(0,0,0,0.35)",
+      display: "grid",
+      placeItems: "center",
+      padding: 16,
+      zIndex: 60,
+    }}
+    onMouseDown={(e) => {
+      if (e.target === e.currentTarget) {
+        setDetailModalProduct(null);
+        setDetailModalAddedAt("");
+      }
+    }}
+  >
+    <div className="card" style={{ width: "min(860px, 94vw)", padding: 16 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 10,
+          alignItems: "center",
+        }}
+      >
+        <div>
+          <p style={{ margin: 0, fontWeight: 1000, fontSize: 16 }}>Detalles</p>
+          <p
             style={{
-              position: "fixed",
-              inset: 0,
-              background: "rgba(0,0,0,0.35)",
-              display: "grid",
-              placeItems: "center",
-              padding: 16,
-              zIndex: 60,
-            }}
-            onMouseDown={(e) => {
-              if (e.target === e.currentTarget) {
-                setDetailModalProduct(null);
-                setDetailModalAddedAt("");
-              }
+              margin: "4px 0 0",
+              color: MUTED,
+              fontWeight: 800,
+              fontSize: 13,
             }}
           >
-            <div className="card" style={{ width: "min(860px, 94vw)", padding: 16 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                <div>
-                  <p style={{ margin: 0, fontWeight: 1000, fontSize: 16 }}>Detalles</p>
-                  <p style={{ margin: "4px 0 0", color: MUTED, fontWeight: 800, fontSize: 13 }}>
-                    {detailModalProduct.name}
-                  </p>
-                </div>
+            {detailModalProduct.name}
+          </p>
+        </div>
 
-                <button
-                  className="btn btn-animate"
-                  type="button"
-                  onClick={() => {
-                    setDetailModalProduct(null);
-                    setDetailModalAddedAt("");
-                  }}
-                >
-                  Cerrar
-                </button>
-              </div>
+        <button
+          className="btn btn-animate"
+          type="button"
+          onClick={() => {
+            setDetailModalProduct(null);
+            setDetailModalAddedAt("");
+          }}
+        >
+          Cerrar
+        </button>
+      </div>
 
-              {detailModalAddedAt ? (
-                <div style={{ marginTop: 14 }}>
-                  <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>Agregado</p>
-                  <div className="pill">{fmtDateTimeDMY(detailModalAddedAt)}</div>
-                </div>
-              ) : null}
+      {detailModalAddedAt ? (
+        <div style={{ marginTop: 14 }}>
+          <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>
+            Agregado
+          </p>
+          <div className="pill">{fmtDateTimeDMY(detailModalAddedAt)}</div>
+        </div>
+      ) : null}
 
-              <div style={{ marginTop: 14 }}>
-                <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>Categoría</p>
-                <div className="pill">{detailModalProduct.category}</div>
-              </div>
+      <div style={{ marginTop: 14 }}>
+        <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>
+          Categoría
+        </p>
+        <div className="pill">{detailModalProduct.category}</div>
+      </div>
 
-              <div style={{ marginTop: 12 }}>
-                <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>Precio</p>
-                <div className="pill">{COP.format(toNum(detailModalProduct.price, 0))}</div>
-              </div>
+      <div style={{ marginTop: 12 }}>
+        <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>
+          Precio
+        </p>
+        <div className="pill">{COP.format(toNum(detailModalProduct.price, 0))}</div>
+      </div>
 
-              <div style={{ marginTop: 12 }}>
-                <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>Receta (si aplica)</p>
-                <RecipeInline product={detailModalProduct} getRecipe={getRecipe} productsById={productsById} />
-              </div>
-            </div>
-          </div>
-        ) : null}
+      <div style={{ marginTop: 12 }}>
+        <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>
+          Receta (si aplica)
+        </p>
+        <RecipeInline product={detailModalProduct} getRecipe={getRecipe} productsById={productsById} />
+      </div>
+    </div>
+  </div>
+) : null}
+
 
         {/* ================= Modal cerrar venta ================= */}
         {confirmSaleOpen && selected ? (
@@ -2757,10 +2882,24 @@ export default function SalesTabsPage() {
             }}
           >
             <div className="card" style={{ width: "min(920px, 94vw)", padding: 16 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  alignItems: "center",
+                }}
+              >
                 <div>
                   <p style={{ margin: 0, fontWeight: 1000, fontSize: 16 }}>Cerrar venta</p>
-                  <p style={{ margin: "4px 0 0", color: MUTED, fontWeight: 800, fontSize: 13 }}>
+                  <p
+                    style={{
+                      margin: "4px 0 0",
+                      color: MUTED,
+                      fontWeight: 800,
+                      fontSize: 13,
+                    }}
+                  >
                     Mesa: <b style={{ color: TEXT }}>{selected.name}</b> · Total:{" "}
                     <b style={{ color: TEXT }}>{COP.format(selectedTotals.total || 0)}</b>
                   </p>
@@ -2771,47 +2910,161 @@ export default function SalesTabsPage() {
                 </button>
               </div>
 
-              <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)", gap: 12 }}>
-                <div>
-                  <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>Efectivo</p>
-                  <input className="field" value={payCashStr} onChange={(e) => setPayCashStr(e.target.value)} inputMode="numeric" placeholder="0" />
+              <div style={{ marginTop: 14 }}>
+                <p style={{ margin: "0 0 8px", color: MUTED, fontWeight: 900, fontSize: 12 }}>
+                  Pago
+                </p>
+
+                <div style={{ display: "grid", gap: 10 }}>
+                  {payLines.map((ln) => (
+                    <div key={ln.id} className="payRow">
+                      <div>
+                        <select
+                          className="field"
+                          value={ln.method}
+                          onChange={(e) => {
+                            const next = e.target.value as PayMethod;
+                            setPayLines((prev) =>
+                              prev.map((p) => (p.id === ln.id ? { ...p, method: next } : p))
+                            );
+                          }}
+                        >
+                          <option value="CASH">Efectivo</option>
+                          <option value="CARD">Tarjeta</option>
+                          <option value="TRANSFER">Transferencia</option>
+                          <option value="OTHER">Otro</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <input
+                          className="field"
+                          value={ln.amountStr}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setPayLines((prev) =>
+                              prev.map((p) => (p.id === ln.id ? { ...p, amountStr: v } : p))
+                            );
+                          }}
+                          inputMode="numeric"
+                          placeholder="0"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="payRefRow">
+                          {ln.method === "TRANSFER" ? (
+                            <select
+                              className="field"
+                              value={ln.provider}
+                              onChange={(e) => {
+                                const v = e.target.value as TransferProvider;
+                                setPayLines((prev) =>
+                                  prev.map((p) => (p.id === ln.id ? { ...p, provider: v } : p))
+                                );
+                              }}
+                              style={{ maxWidth: 150 }}
+                            >
+                              <option value="NEQUI">NEQUI</option>
+                              <option value="DAVIPLATA">DAVIPLATA</option>
+                            </select>
+                          ) : null}
+
+                          <input
+                            className="field"
+                            value={ln.reference}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setPayLines((prev) =>
+                                prev.map((p) => (p.id === ln.id ? { ...p, reference: v } : p))
+                              );
+                            }}
+                            placeholder="Referencia"
+                          />
+                        </div>
+                      </div>
+
+                      <button
+                        className="btn btn-animate"
+                        type="button"
+                        disabled={payLines.length === 1}
+                        onClick={() => {
+                          setPayLines((prev) => {
+                            if (prev.length <= 1) return prev;
+                            return prev.filter((p) => p.id !== ln.id);
+                          });
+                        }}
+                      >
+                        Quitar
+                      </button>
+                    </div>
+                  ))}
                 </div>
 
-                <div>
-                  <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>Tarjeta</p>
-                  <input className="field" value={payCardStr} onChange={(e) => setPayCardStr(e.target.value)} inputMode="numeric" placeholder="0" />
-                </div>
+                <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button
+                    className="btn btn-animate"
+                    type="button"
+                    onClick={() => {
+                      setPayLines((prev) => [...prev, makePayLine()]);
+                    }}
+                  >
+                    Añadir pago
+                  </button>
 
-                <div>
-                  <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>Transferencia</p>
-                  <input className="field" value={payTransferStr} onChange={(e) => setPayTransferStr(e.target.value)} inputMode="numeric" placeholder="0" />
+                  <button
+                    className="btn btn-animate"
+                    type="button"
+                    onClick={() => {
+                      const t = Math.max(0, Math.round(toNum(selectedTotals.total, 0)));
+                      setPayLines([makePayLine({ method: "CASH", amountStr: String(t), reference: "" })]);
+                    }}
+                  >
+                    Efectivo exacto
+                  </button>
                 </div>
               </div>
 
-              <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 12 }}>
-                <div>
-                  <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>Proveedor (transferencia)</p>
-                  <select className="field" value={payProvider} onChange={(e) => setPayProvider(e.target.value as any)}>
-                    <option value="NEQUI">NEQUI</option>
-                    <option value="DAVIPLATA">DAVIPLATA</option>
-                  </select>
+              <div className="payCards">
+                <div className="card" style={{ padding: 12 }}>
+                  <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>Pagado</p>
+                  <div style={{ margin: 0, fontWeight: 1000, fontSize: 16 }}>
+                    {COP.format(payPreview.paid)}
+                  </div>
                 </div>
 
-                <div>
-                  <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>Notas de venta</p>
-                  <input className="field" value={saleNotes} onChange={(e) => setSaleNotes(e.target.value)} placeholder="Opcional" />
+                <div className="card" style={{ padding: 12 }}>
+                  <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>Cambio</p>
+                  <div style={{ margin: 0, fontWeight: 1000, fontSize: 16 }}>
+                    {COP.format(payPreview.change)}
+                  </div>
                 </div>
               </div>
 
               <div style={{ marginTop: 12 }}>
-                <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>Validación</p>
-                <p style={{ margin: 0, color: MUTED, fontWeight: 800, fontSize: 13 }}>
-                  Puedes registrar pagos parciales. El sistema cerrará la mesa si registras un pago mayor a 0.
-                </p>
+                <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>Notas de venta</p>
+                <input
+                  className="field"
+                  value={saleNotes}
+                  onChange={(e) => setSaleNotes(e.target.value)}
+                  placeholder="Opcional"
+                />
               </div>
 
-              <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
-                <button className="btn btn-animate" type="button" onClick={() => setConfirmSaleOpen(false)}>
+              <div
+                style={{
+                  marginTop: 14,
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  gap: 10,
+                  flexWrap: "wrap",
+                }}
+              >
+                <button
+                  className="btn btn-animate"
+                  type="button"
+                  onClick={() => setConfirmSaleOpen(false)}
+                >
                   Cancelar
                 </button>
 
@@ -2821,23 +3074,34 @@ export default function SalesTabsPage() {
                   onClick={async () => {
                     if (!selected) return;
 
-                    const cash = Math.max(0, Math.round(toNum(payCashStr, 0)));
-                    const card = Math.max(0, Math.round(toNum(payCardStr, 0)));
-                    const tran = Math.max(0, Math.round(toNum(payTransferStr, 0)));
+                    const normalized = (payLines || []).map((ln) => {
+                      const amount = Math.max(0, Math.round(toNum(ln.amountStr, 0)));
+                      const reference = String(ln.reference || "").trim();
+                      const provider = ln.provider;
+                      const method = ln.method;
+                      return { method, amount, provider, reference };
+                    });
 
-                    const payTotal = cash + card + tran;
+                    const payTotal = normalized.reduce((s, p) => s + Math.max(0, toNum(p.amount, 0)), 0);
                     if (payTotal <= 0) {
                       setMsg("El total pagado debe ser mayor a 0");
                       return;
                     }
 
-                    const payments: Payment[] = [];
-                    if (cash > 0) payments.push({ method: "CASH", amount: cash });
-                    if (card > 0) payments.push({ method: "CARD", amount: card });
-                    if (tran > 0) payments.push({ method: "TRANSFER", amount: tran, provider: payProvider });
+                    const payments: Payment[] = normalized
+                      .filter((p) => p.amount > 0)
+                      .map((p) => {
+                        const out: Payment = { method: p.method, amount: p.amount };
+                        if (p.method === "TRANSFER") out.provider = p.provider;
+                        if (p.reference) out.reference = p.reference;
+                        return out;
+                      });
 
                     const invDisc = Math.max(0, Math.round(toNum(invoiceDiscountStr, 0)));
-                    const invIva = invoiceIVAStr.trim() === "" ? null : Math.max(0, Math.round(toNum(invoiceIVAStr, 0)));
+                    const invIva =
+                      invoiceIVAStr.trim() === ""
+                        ? null
+                        : Math.max(0, Math.round(toNum(invoiceIVAStr, 0)));
 
                     const rawItems = (selected.items || []).map((it) => ({
                       product_id: it.product_id,
@@ -2854,7 +3118,10 @@ export default function SalesTabsPage() {
                     }, 0);
 
                     const baseTotals = computeTabTotalsFromItems(selected);
-                    const discToApply = Math.max(0, Math.min(invDisc, Math.round(baseTotals.subtotal || 0)));
+                    const discToApply = Math.max(
+                      0,
+                      Math.min(invDisc, Math.round(baseTotals.subtotal || 0))
+                    );
                     let remainingDisc = discToApply;
 
                     const items = rawItems.map((it, idx) => {
@@ -2884,7 +3151,13 @@ export default function SalesTabsPage() {
                       };
                     });
 
-                    const payload = { tab_id: selected.id, tab_name: selected.name, notes: saleNotes || "", items, payments };
+                    const payload = {
+                      tab_id: selected.id,
+                      tab_name: selected.name,
+                      notes: saleNotes || "",
+                      items,
+                      payments,
+                    };
 
                     const r = await salesCreateWithRecipesOnline(payload);
                     if (!r.ok) {
@@ -2893,7 +3166,10 @@ export default function SalesTabsPage() {
                     }
 
                     await tabsCloseOnline(selected.id);
+
                     setConfirmSaleOpen(false);
+                    setPayLines([]);
+                    setSaleNotes("");
                     setInvoiceAdjOpen(false);
                     setInvoiceDiscountStr("0");
                     setInvoiceIVAStr("");
@@ -2905,7 +3181,7 @@ export default function SalesTabsPage() {
                     flash("Venta cerrada");
                   }}
                 >
-                  Confirmar
+                  Confirmar venta
                 </button>
               </div>
             </div>
@@ -2929,12 +3205,26 @@ export default function SalesTabsPage() {
             }}
           >
             <div className="card" style={{ width: "min(560px, 94vw)", padding: 16 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  alignItems: "center",
+                }}
+              >
                 <div>
                   <p style={{ margin: 0, fontWeight: 1000, fontSize: 16 }}>
                     {placeType === "BARRA" ? "Abrir barra" : "Abrir mesa"}
                   </p>
-                  <p style={{ margin: "4px 0 0", color: MUTED, fontWeight: 800, fontSize: 13 }}>
+                  <p
+                    style={{
+                      margin: "4px 0 0",
+                      color: MUTED,
+                      fontWeight: 800,
+                      fontSize: 13,
+                    }}
+                  >
                     Ingresa el número para crear el nombre automáticamente.
                   </p>
                 </div>
@@ -2955,7 +3245,15 @@ export default function SalesTabsPage() {
                 />
               </div>
 
-              <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
+              <div
+                style={{
+                  marginTop: 14,
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  gap: 10,
+                  flexWrap: "wrap",
+                }}
+              >
                 <button className="btn btn-animate" type="button" onClick={() => setCreateOpen(false)}>
                   Cancelar
                 </button>
@@ -2995,10 +3293,24 @@ export default function SalesTabsPage() {
             }}
           >
             <div className="card" style={{ width: "min(640px, 94vw)", padding: 16 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  alignItems: "center",
+                }}
+              >
                 <div>
                   <p style={{ margin: 0, fontWeight: 1000, fontSize: 16 }}>Eliminar mesa</p>
-                  <p style={{ margin: "4px 0 0", color: MUTED, fontWeight: 800, fontSize: 13 }}>
+                  <p
+                    style={{
+                      margin: "4px 0 0",
+                      color: MUTED,
+                      fontWeight: 800,
+                      fontSize: 13,
+                    }}
+                  >
                     Esta acción elimina la mesa y sus ítems.
                   </p>
                 </div>
@@ -3020,7 +3332,15 @@ export default function SalesTabsPage() {
                 </span>
               </div>
 
-              <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
+              <div
+                style={{
+                  marginTop: 14,
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  gap: 10,
+                  flexWrap: "wrap",
+                }}
+              >
                 <button className="btn btn-animate" type="button" onClick={() => setDeleteOpen(false)}>
                   Cancelar
                 </button>
@@ -3109,13 +3429,22 @@ function RecipeInline({
         const unit = it.unit || it.ingredient_measure || "";
         return (
           <div key={`${it.ingredient_id}-${idx}`} className="card" style={{ padding: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 10,
+                alignItems: "center",
+              }}
+            >
               <b>{name}</b>
               <span className="pill">
                 {qty} {unit}
               </span>
             </div>
-            <p style={{ margin: "6px 0 0", color: MUTED, fontWeight: 800, fontSize: 12 }}>Rol: {it.role}</p>
+            <p style={{ margin: "6px 0 0", color: MUTED, fontWeight: 800, fontSize: 12 }}>
+              Rol: {it.role}
+            </p>
           </div>
         );
       })}

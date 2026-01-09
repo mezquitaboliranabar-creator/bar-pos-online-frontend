@@ -105,6 +105,38 @@ function buildQuery(obj: Record<string, any>) {
   return s ? `?${s}` : "";
 }
 
+/* ================= Helpers de fecha (CO) ================= */
+const CO_TZ = "-05:00";
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+function normTime(t: string, end: boolean) {
+  const raw = String(t || "").trim();
+  const parts = raw.split(":");
+  let H = Number(parts[0]);
+  let M = Number(parts[1]);
+
+  if (!Number.isFinite(H)) H = end ? 23 : 0;
+  if (!Number.isFinite(M)) M = end ? 59 : 0;
+
+  H = Math.min(23, Math.max(0, Math.trunc(H)));
+  M = Math.min(59, Math.max(0, Math.trunc(M)));
+
+  const S = end ? 59 : 0;
+  return `${pad2(H)}:${pad2(M)}:${pad2(S)}`;
+}
+
+function isoCO(dateStr: string, timeStr: string, end: boolean) {
+  const d = String(dateStr || "").trim();
+  if (!d) return "";
+  const t = normTime(timeStr, end);
+  return `${d}T${t}${CO_TZ}`;
+}
+
+function msFromIso(iso: string) {
+  const ms = new Date(String(iso || "")).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
 /* Lectura robusta de JWT en storage */
 const JWT_RE = /^[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+$/;
 
@@ -524,7 +556,8 @@ const ISearch = (p: any) => (
 
 /* ================= Utils ================= */
 const digitsOnly = (s: string) => (s ?? "").replace(/\D/g, "");
-const itemsCols5 = "minmax(72px,.7fr) minmax(110px,.9fr) minmax(110px,.9fr) minmax(110px,.9fr) minmax(120px,1fr)";
+const itemsCols5 =
+  "minmax(72px,.7fr) minmax(110px,.9fr) minmax(110px,.9fr) minmax(110px,.9fr) minmax(120px,1fr)";
 
 /* CSS local */
 const localCss = `
@@ -759,10 +792,24 @@ export default function SalesListPage() {
     setListErr("");
 
     try {
+      const startIso = from ? isoCO(from, "00:00", false) : "";
+      const endIso = to ? isoCO(to, "23:59", true) : "";
+
+      let fixedStart: string | undefined = startIso || undefined;
+      let fixedEnd: string | undefined = endIso || undefined;
+
+      const startMs = startIso ? msFromIso(startIso) : null;
+      const endMs = endIso ? msFromIso(endIso) : null;
+
+      if (startMs != null && endMs != null && endMs < startMs) {
+        fixedStart = endIso || undefined;
+        fixedEnd = startIso || undefined;
+      }
+
       const payload: any = {
         q: q.trim() || undefined,
-        start: from || undefined,
-        end: to || undefined,
+        start: fixedStart,
+        end: fixedEnd,
         status: status || undefined,
         limit: 200,
         offset: 0,

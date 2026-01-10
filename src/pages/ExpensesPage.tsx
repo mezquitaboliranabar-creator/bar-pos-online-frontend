@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { fmtDateTimeCO, todayStrCO } from "../lib/datetime";
 
-/* ================= Tipos ================= */
+/* Tipos base */
 type Role = "admin" | "vendedor";
 type ID = string | number;
 
@@ -17,8 +17,7 @@ type Me =
 
 type ExpenseMethod = "CASH" | "CARD" | "TRANSFER" | "OTHER" | string;
 type ExpenseProvider = "NEQUI" | "DAVIPLATA" | null | string;
-
-type ExpenseStatus = "ACTIVE" | "VOIDED" | string;
+type ExpenseStatus = "ACTIVE" | "VOID" | string;
 
 type Expense = {
   id: ID;
@@ -27,6 +26,8 @@ type Expense = {
   method: ExpenseMethod;
   provider?: ExpenseProvider;
   amount: number;
+  concept?: string | null;
+  category?: string | null;
   note?: string | null;
   status: ExpenseStatus;
   user_name?: string | null;
@@ -36,10 +37,10 @@ type ApiOk<T> = { ok: true } & T;
 type ApiErr = { ok: false; error: string; code?: string };
 type ApiRes<T> = ApiOk<T> | ApiErr;
 
-/* ================= API helpers ================= */
+/* API base */
 const API_BASE = String(process.env.REACT_APP_API_URL || "").replace(/\/$/, "");
 
-/* Une base + path y evita /api duplicado */
+/* Une base + path */
 function joinUrl(base: string, path: string) {
   const b = String(base || "").replace(/\/+$/, "");
   const p0 = String(path || "");
@@ -65,7 +66,7 @@ function buildQuery(obj: Record<string, any>) {
   return s ? `?${s}` : "";
 }
 
-/* ================= Helpers de token ================= */
+/* Helpers de token */
 const JWT_RE = /^[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+$/;
 
 function stripQuotes(s: string) {
@@ -195,7 +196,7 @@ async function authCurrentOnline(): Promise<ApiRes<{ user: any }>> {
   return last;
 }
 
-/* ================= Helpers fecha (CO) ================= */
+/* Helpers fecha CO */
 const CO_TZ = "-05:00";
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
@@ -222,11 +223,13 @@ function isoCO(dateStr: string, end: boolean) {
   return `${d}T${t}${CO_TZ}`;
 }
 
-/* ================= Normalizadores ================= */
+/* Normalizador */
 function normalizeExpense(raw: any): Expense {
   const u = raw?.user || raw?.createdBy || raw?.created_by || null;
   const userId = raw?.created_by ?? raw?.createdBy ?? u?.id ?? u?._id ?? null;
   const userName = raw?.user_name ?? u?.name ?? u?.username ?? null;
+
+  const st = String(raw?.status || "ACTIVE").toUpperCase();
 
   return {
     id: raw?.id ?? raw?._id ?? "",
@@ -235,13 +238,15 @@ function normalizeExpense(raw: any): Expense {
     method: String(raw?.method || "CASH").toUpperCase(),
     provider: raw?.provider ? String(raw.provider).toUpperCase() : null,
     amount: Number(raw?.amount ?? 0) || 0,
+    concept: raw?.concept ?? null,
+    category: raw?.category ?? null,
     note: raw?.note ?? raw?.description ?? null,
-    status: String(raw?.status || "ACTIVE").toUpperCase(),
+    status: st,
     user_name: userName,
   };
 }
 
-/* ================= Formatos ================= */
+/* Formatos */
 const COP = new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 });
 const fmtCOP = (n: number) => COP.format(Number(n || 0));
 
@@ -268,36 +273,60 @@ const methodLabel = (m: ExpenseMethod, provider?: ExpenseProvider) => {
 const statusLabel = (s: ExpenseStatus) => {
   const st = String(s).toUpperCase();
   if (st === "ACTIVE") return "Activo";
-  if (st === "VOIDED") return "Anulado";
+  if (st === "VOID") return "Anulado";
   return String(s);
 };
 
 const statusColorOf = (st: ExpenseStatus) => {
   const s = String(st).toUpperCase();
   if (s === "ACTIVE") return "#166534";
-  if (s === "VOIDED") return "#991b1b";
+  if (s === "VOID") return "#991b1b";
   return "#374151";
 };
 
-const fmtDateTimeCO12 = (s: string) => {
+/* Formato fecha/hora con a. m. / p. m. */
+const fmtDateTimeCOAmPm = (input: string) => {
+  const s = String(input || "").trim();
+  if (!s) return "";
+
+  const reSql = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?$/;
+
+  let d: Date | null = null;
+
+  if (reSql.test(s)) {
+    const iso = `${s.replace(" ", "T")}${CO_TZ}`;
+    const dd = new Date(iso);
+    if (!Number.isNaN(dd.getTime())) d = dd;
+  } else {
+    const dd = new Date(s);
+    if (!Number.isNaN(dd.getTime())) d = dd;
+  }
+
+  if (!d) {
+    try {
+      return fmtDateTimeCO(s as any);
+    } catch {
+      return s;
+    }
+  }
+
   try {
-    const re = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?$/;
-    if (!re.test(String(s))) return fmtDateTimeCO(s as any);
-    const y = s.slice(0, 4);
-    const m = s.slice(5, 7);
-    const d = s.slice(8, 10);
-    const HH = parseInt(s.slice(11, 13), 10);
-    const mm = s.slice(14, 16);
-    const am = HH < 12;
-    let h12 = HH % 12;
-    if (h12 === 0) h12 = 12;
-    return `${d}/${m}/${y} ${h12}:${mm} ${am ? "a.m." : "p.m."}`;
+    const out = d.toLocaleString("es-CO", {
+      timeZone: "America/Bogota",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+    return out.replace(",", "");
   } catch {
     return fmtDateTimeCO(s as any);
   }
 };
 
-/* ================= UI theme ================= */
+/* UI theme */
 const YRGB = "244,194,43";
 const BG = "#f7f8fb";
 const TEXT = "#222831";
@@ -393,14 +422,6 @@ const btnSoft: React.CSSProperties = {
   fontWeight: 600,
 };
 
-const btnDanger: React.CSSProperties = {
-  ...btn,
-  borderColor: "rgba(176,0,32,0.28)",
-  background: "rgba(176,0,32,0.06)",
-  color: "#7a0016",
-  fontWeight: 700,
-};
-
 const modalOverlay: React.CSSProperties = {
   position: "fixed",
   inset: 0,
@@ -422,7 +443,7 @@ const listScroll: React.CSSProperties = {
   overflowX: "hidden",
 };
 
-/* ================= Iconos ================= */
+/* Iconos */
 const IHome = (p: any) => (
   <svg
     width="18"
@@ -496,7 +517,7 @@ const IList = (p: any) => (
   </svg>
 );
 
-/* ================= Utils ================= */
+/* Utils */
 const digitsOnly = (s: string) => (s ?? "").replace(/\D/g, "");
 
 function clampMoney(v: string) {
@@ -505,7 +526,6 @@ function clampMoney(v: string) {
   return Math.min(999999999, Math.trunc(n));
 }
 
-/* CSS local */
 const localCss = `
   html, body { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   .page-root { animation: pageIn 260ms ease both; }
@@ -546,14 +566,15 @@ const localCss = `
     .grid-top { grid-template-columns: 1fr; }
   }
 
+  /* Ajuste de columnas para que el detalle tenga más espacio */
   .list-grid {
     display: grid;
     grid-template-columns:
-      minmax(150px, 8fr)
-      minmax(0, 1.3fr)
-      minmax(160px, 1fr)
-      minmax(140px, 1fr);
-    gap: 10px;
+      minmax(140px, 1.05fr)
+      minmax(280px, 2.6fr)
+      minmax(140px, 1.15fr)
+      minmax(140px, 1.15fr);
+    gap: 12px;
     align-items: center;
     min-width: 0;
   }
@@ -572,11 +593,11 @@ const localCss = `
   }
 `;
 
-/* ================= Componente ================= */
+/* Página */
 export default function ExpensesPage() {
   const navigate = useNavigate();
 
-  /* Confirmación dentro del módulo */
+  /* Confirmación interna */
   const confirmResolveRef = useRef<((ok: boolean) => void) | null>(null);
   const [confirmState, setConfirmState] = useState<{
     open: boolean;
@@ -662,6 +683,7 @@ export default function ExpensesPage() {
 
   /* Modal crear */
   const [openCreate, setOpenCreate] = useState(false);
+  const [cConcept, setCConcept] = useState<string>("");
   const [cAmount, setCAmount] = useState<string>("");
   const [cMethod, setCMethod] = useState<ExpenseMethod>("CASH");
   const [cProvider, setCProvider] = useState<ExpenseProvider>(null);
@@ -767,6 +789,7 @@ export default function ExpensesPage() {
     return items.filter((it) => {
       const hay = [
         String(it.id || ""),
+        String(it.concept || ""),
         String(it.note || ""),
         methodLabel(it.method, it.provider),
         statusLabel(it.status),
@@ -778,7 +801,7 @@ export default function ExpensesPage() {
     });
   }, [items, q]);
 
-  const activeItems = useMemo(() => visibleItems.filter((x) => String(x.status).toUpperCase() !== "VOIDED"), [visibleItems]);
+  const activeItems = useMemo(() => visibleItems.filter((x) => String(x.status).toUpperCase() !== "VOID"), [visibleItems]);
 
   const kpiTotal = useMemo(() => activeItems.reduce((a, x) => a + (Number(x.amount || 0) || 0), 0), [activeItems]);
   const kpiCount = activeItems.length;
@@ -794,6 +817,7 @@ export default function ExpensesPage() {
 
   function openCreateModal() {
     setCreateErr("");
+    setCConcept("");
     setCAmount("");
     setCMethod("CASH");
     setCProvider(null);
@@ -804,6 +828,12 @@ export default function ExpensesPage() {
   async function submitCreate() {
     if (!isAdmin) {
       setCreateErr("Solo admin puede crear gastos");
+      return;
+    }
+
+    const concept = String(cConcept || "").trim();
+    if (!concept) {
+      setCreateErr("Concepto requerido");
       return;
     }
 
@@ -826,6 +856,7 @@ export default function ExpensesPage() {
 
     try {
       const body: any = {
+        concept,
         amount,
         method: mm,
         provider: mm === "TRANSFER" ? pv : null,
@@ -896,7 +927,6 @@ export default function ExpensesPage() {
           </header>
 
           <div className="grid-top">
-            {/* Panel filtros + KPIs */}
             <div style={{ ...card, padding: 12 }} className="cardfx">
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, alignItems: "center" }}>
                 <div style={inputWithIconWrap}>
@@ -909,7 +939,7 @@ export default function ExpensesPage() {
                     onKeyDown={(e) => {
                       if (e.key === "Enter") loadList();
                     }}
-                    placeholder="Buscar (nota, método, monto)…"
+                    placeholder="Buscar (concepto, nota, método, monto)…"
                     style={inputWithIcon}
                   />
                 </div>
@@ -985,7 +1015,6 @@ export default function ExpensesPage() {
               )}
             </div>
 
-            {/* KPIs */}
             <div style={{ display: "grid", gap: 12 }}>
               <div style={{ ...card, padding: 12 }} className="cardfx">
                 <div style={{ color: MUTED }}>Gastos (activos)</div>
@@ -1021,7 +1050,6 @@ export default function ExpensesPage() {
             </div>
           </div>
 
-          {/* Modal listado */}
           {openList && (
             <div style={modalOverlay} role="dialog" aria-modal="true" onClick={() => setOpenList(false)}>
               <div style={modalCard} className="cardfx" onClick={(e) => e.stopPropagation()}>
@@ -1101,21 +1129,27 @@ export default function ExpensesPage() {
                       return (
                         <div key={String(it.id)} style={{ ...rowBase, background: "#fff" }}>
                           <div className="list-grid">
-                            <div>{fmtDateTimeCO12(it.created_at)}</div>
+                            <div>{fmtDateTimeCOAmPm(it.created_at)}</div>
 
                             <div className="min0" style={{ overflow: "hidden" }}>
                               <div
                                 style={{
-                                  fontWeight: 700,
-                                  whiteSpace: "nowrap",
-                                  textOverflow: "ellipsis",
-                                  overflow: "hidden",
+                                  fontWeight: 800,
+                                  lineHeight: 1.2,
+                                  wordBreak: "break-word",
+                                  whiteSpace: "normal",
                                 }}
                               >
-                                {it.note ? String(it.note) : "—"}
+                                {it.concept ? String(it.concept) : "—"}
                               </div>
 
-                              <div style={{ fontSize: 12, color: MUTED, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                              {it.note ? (
+                                <div style={{ fontSize: 12, color: MUTED, marginTop: 4, whiteSpace: "normal", wordBreak: "break-word" }}>
+                                  {String(it.note)}
+                                </div>
+                              ) : null}
+
+                              <div style={{ fontSize: 12, color: MUTED, display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
                                 {it.user_name ? <span>Por: {it.user_name}</span> : null}
                                 <span
                                   style={{
@@ -1156,13 +1190,17 @@ export default function ExpensesPage() {
             </div>
           )}
 
-          {/* Modal crear */}
           {openCreate && (
             <div style={modalOverlay} role="dialog" aria-modal="true" onClick={() => setOpenCreate(false)}>
               <div style={{ ...modalCard, width: "min(520px, 96vw)" }} className="cardfx" onClick={(e) => e.stopPropagation()}>
                 <div style={sectionTitle}>Nuevo gasto</div>
 
                 <div style={{ padding: "12px 16px", display: "grid", gap: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Concepto</div>
+                    <input value={cConcept} onChange={(e) => setCConcept(e.target.value)} placeholder="Ej: Compra de hielo" style={input} />
+                  </div>
+
                   <div>
                     <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Monto</div>
                     <input
@@ -1217,7 +1255,7 @@ export default function ExpensesPage() {
                     <textarea
                       value={cNote}
                       onChange={(e) => setCNote(e.target.value)}
-                      placeholder="Ej: Pago de hielo, compra de insumos…"
+                      placeholder="Ej: Pago a proveedor, compra rápida…"
                       style={{ ...input, height: 92, paddingTop: 10 }}
                     />
                   </div>
@@ -1245,9 +1283,7 @@ export default function ExpensesPage() {
                     </button>
                   </div>
 
-                  <div style={{ color: MUTED, fontSize: 12 }}>
-                    Solo se registra el monto del gasto. No se maneja caja en este módulo.
-                  </div>
+                  <div style={{ color: MUTED, fontSize: 12 }}>Solo se registra el gasto manual. No se maneja caja en este módulo.</div>
                 </div>
               </div>
             </div>

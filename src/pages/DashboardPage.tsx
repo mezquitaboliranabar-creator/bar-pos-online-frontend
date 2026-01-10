@@ -81,11 +81,7 @@ const baseIconProps = {
 
 /* Icono de marca para el título */
 const IconBrand = () => (
-  <svg
-    {...baseIconProps}
-    width={26}
-    height={26}
-  >
+  <svg {...baseIconProps} width={26} height={26}>
     <rect x="3" y="4" width="18" height="15" rx="4" />
     <path d="M7 9h10" />
     <path d="M7 13h5" />
@@ -158,6 +154,22 @@ const IconRecetas = () => (
     <path d="M8 7h6" />
     <path d="M8 11h6" />
     <path d="M8 15h3" />
+  </svg>
+);
+
+const IconGastos = () => (
+  <svg {...baseIconProps}>
+    <path d="M12 2v2" />
+    <path d="M12 20v2" />
+    <path d="M4 12H2" />
+    <path d="M22 12h-2" />
+    <path d="M7.5 7.5 6 6" />
+    <path d="M18 18l-1.5-1.5" />
+    <path d="M16.5 7.5 18 6" />
+    <path d="M6 18l1.5-1.5" />
+    <circle cx="12" cy="12" r="5" />
+    <path d="M12 9v6" />
+    <path d="M9.5 12h5" />
   </svg>
 );
 
@@ -547,6 +559,13 @@ export default function DashboardPage() {
       desc: "Totales, formas de pago y resúmenes.",
       to: "/ventas/reportes",
       Icon: IconReportes,
+    },
+    {
+      key: "gastos",
+      title: "Gastos",
+      desc: "Registrar y consultar gastos manuales.",
+      to: "/gastos",
+      Icon: IconGastos,
     },
   ];
 

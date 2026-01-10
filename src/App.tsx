@@ -11,6 +11,7 @@ import SalesPage from "./pages/SalesPage";
 import SalesTabsPage from "./pages/SalesTabsPage";
 import SalesListPage from "./pages/SalesListPage";
 import SalesReportsPage from "./pages/SalesReportsPage";
+import ExpensesPage from "./pages/ExpensesPage";
 
 /* Componente principal de la app */
 export default function App() {
@@ -34,6 +35,8 @@ export default function App() {
         <Route path="/ventas/lista" element={<SalesListPage />} />
         <Route path="/ventas/reportes" element={<SalesReportsPage />} />
 
+        {/* Gastos */}
+        <Route path="/gastos" element={<ExpensesPage />} />
 
         {/* Mesas / Tabs */}
         <Route path="/mesas" element={<SalesTabsPage />} />

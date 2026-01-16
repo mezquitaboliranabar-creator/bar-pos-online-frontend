@@ -231,7 +231,7 @@ async function recipeGetOnline(productId: string): Promise<ApiResp<{ items?: any
   return { ok: true, items: [] };
 }
 
-async function salesCreateWithRecipesOnline(body: {
+async function salesCreateOnline(body: {
   items: {
     product_id: string;
     qty: number;
@@ -240,11 +240,18 @@ async function salesCreateWithRecipesOnline(body: {
     tax_rate?: number;
   }[];
   payments: Payment[];
+  status?: string;
+  subtotal?: number;
+  discount_total?: number;
+  tax_total?: number;
+  total?: number;
   notes?: string;
+  note?: string;
   client?: string;
+  customer_name?: string;
   tab_id?: string | null;
 }): Promise<ApiResp<{ sale?: { id: string; created_at: string } }>> {
-  return httpJSON("POST", "/api/sales/with-recipes", body, { auth: true });
+  return httpJSON("POST", "/api/sales", body, { auth: true });
 }
 
 /* ====== Helpers ====== */
@@ -929,12 +936,18 @@ export default function SalesPage() {
           tax_rate: typeof l.tax_rate === "number" ? l.tax_rate : undefined,
         })),
         payments: finalPayments,
+        status: "COMPLETED",
+        subtotal: cartStats.subtotal,
+        discount_total: cartStats.discount_total,
+        tax_total: cartStats.tax_total,
+        total: cartStats.total,
         notes: notes.trim() || undefined,
         client: clientString,
+        customer_name: clientString,
         tab_id: null as any,
       };
 
-      const res = await salesCreateWithRecipesOnline(payload);
+      const res = await salesCreateOnline(payload);
       if (!res.ok) {
         setMsg(res.error || "No fue posible crear la venta");
         return;

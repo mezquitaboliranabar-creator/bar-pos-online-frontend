@@ -252,6 +252,11 @@ const tabsReopenOnline = (tabId: string) =>
 const tabsDeleteOnline = (tabId: string) =>
   httpJSON("DELETE", `/api/tabs/${tabId}`, undefined, { auth: true });
 
+/* Crea venta real en BD */
+const salesCreateOnline = (payload: any) =>
+  httpJSON("POST", "/api/sales", payload, { auth: true });
+
+/* Mantener si aún lo usas en otra parte */
 const salesCreateWithRecipesOnline = (payload: any) =>
   httpJSON("POST", "/api/sales/with-recipes", payload, { auth: true });
 
@@ -3151,15 +3156,41 @@ export default function SalesTabsPage() {
                       };
                     });
 
-                    const payload = {
-                      tab_id: selected.id,
-                      tab_name: selected.name,
-                      notes: saleNotes || "",
-                      items,
-                      payments,
-                    };
+                    // Calcula totales requeridos por backend
+const subtotal = items.reduce((acc: number, it: any) => {
+  const qty = Number(it.qty || 0);
+  const unit = Number(it.unit_price ?? it.unitPrice ?? it.price ?? 0);
+  return acc + qty * unit;
+}, 0);
 
-                    const r = await salesCreateWithRecipesOnline(payload);
+const discount_total = items.reduce((acc: number, it: any) => {
+  return acc + Number(it.line_discount ?? it.lineDiscount ?? 0);
+}, 0);
+
+const tax_total = items.reduce((acc: number, it: any) => {
+  return acc + Number(it.tax ?? 0);
+}, 0);
+
+const total = subtotal - discount_total + tax_total;
+
+
+                   const payload = {
+  status: "COMPLETED",
+  client: selected.name,
+  tab_id: selected.id,
+  tab_name: selected.name,
+  notes: saleNotes || "",
+  subtotal: Math.round(subtotal),
+  discount_total: Math.round(discount_total),
+  tax_total: Math.round(tax_total),
+  total: Math.round(total),
+  items: items,
+  payments,
+};
+
+
+
+                    const r = await salesCreateOnline(payload);
                     if (!r.ok) {
                       setMsg(r.error || "No se pudo crear la venta");
                       return;

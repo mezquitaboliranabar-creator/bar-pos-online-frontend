@@ -3175,18 +3175,18 @@ const total = subtotal - discount_total + tax_total;
 
 
                    const payload = {
-  status: "COMPLETED",
-  client: selected.name,
-  tab_id: selected.id,
-  tab_name: selected.name,
-  notes: saleNotes || "",
-  subtotal: Math.round(subtotal),
-  discount_total: Math.round(discount_total),
-  tax_total: Math.round(tax_total),
-  total: Math.round(total),
-  items: items,
-  payments,
-};
+                    status: "COMPLETED",
+                    client: selected.name,
+                    tab_id: selected.id,
+                    tab_name: selected.name,
+                    notes: saleNotes || "",
+                    subtotal: Math.round(subtotal),
+                    discount_total: Math.round(discount_total),
+                    tax_total: Math.round(tax_total),
+                     total: Math.round(total),
+                     items: items,
+                    payments,
+                             };
 
 
 

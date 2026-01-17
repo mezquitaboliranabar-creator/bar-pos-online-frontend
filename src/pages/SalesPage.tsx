@@ -854,10 +854,16 @@ export default function SalesPage() {
     setShowPay(true);
   };
 
-  const changeDue = useMemo(() => {
-    const paid = payments.reduce<number>((a, p) => a + (Number(p.amount) || 0), 0);
-    const diff = paid - cartStats.total;
-    return { paid, diff, change: diff > 0 ? diff : 0, pending: diff < 0 ? -diff : 0 };
+  /* Pagado, restante y cambio del modal */
+  const payPreview = useMemo(() => {
+    const due = Math.max(0, Math.round(toNum(cartStats.total, 0)));
+    const paid = (payments || []).reduce((s, ln) => {
+      const amt = Math.max(0, Math.round(toNum(ln.amount, 0)));
+      return s + amt;
+    }, 0);
+    const remaining = Math.max(0, due - paid);
+    const change = Math.max(0, paid - due);
+    return { due, paid, remaining, change };
   }, [payments, cartStats.total]);
 
   const clientString = useMemo(() => {
@@ -916,12 +922,18 @@ export default function SalesPage() {
           return { method: p.method, amount, reference };
         });
 
-      const finalPayments: Payment[] =
-        normalizedPayments.length > 0 ? (normalizedPayments as any) : [{ method: "CASH", amount: cartStats.total }];
+      const due = Math.max(0, Math.round(toNum(cartStats.total, 0)));
 
-      const paid = finalPayments.reduce<number>((a, p: any) => a + (p.amount || 0), 0);
-      if (paid < cartStats.total) {
-        setMsg("Pago insuficiente");
+      if (due > 0 && normalizedPayments.length === 0) {
+        setMsg("El total pagado debe ser mayor a 0");
+        return;
+      }
+
+      const finalPayments: Payment[] = normalizedPayments.length > 0 ? (normalizedPayments as any) : [];
+
+      const paid = finalPayments.reduce<number>((a, p: any) => a + Math.max(0, Math.round(toNum(p.amount, 0))), 0);
+      if (due > 0 && paid < due) {
+        setMsg(`Faltan ${COP.format(due - paid)} para completar el pago`);
         return;
       }
 
@@ -1554,24 +1566,40 @@ export default function SalesPage() {
                 </div>
 
                 <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                  <button onClick={() => setPayments((prev) => [...prev, { method: "CARD", amount: 0 }])} style={btnSoft} className="btn-animate">
+                  <button
+                    onClick={() => {
+                      const remaining = Math.max(0, payPreview.due - payPreview.paid);
+                      const amount = remaining > 0 ? remaining : 0;
+                      setPayments((prev) => [...prev, { method: "CARD", amount }]);
+                    }}
+                    style={btnSoft}
+                    className="btn-animate"
+                  >
                     Añadir pago
                   </button>
-                  <button onClick={() => setPayments([{ method: "CASH", amount: cartStats.total }])} style={btnSoft} className="btn-animate">
+                  <button
+                    onClick={() => setPayments([{ method: "CASH", amount: cartStats.total }])}
+                    style={btnSoft}
+                    className="btn-animate"
+                  >
                     Efectivo exacto
                   </button>
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 10 }}>
                   <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 10, background: "#fff" }}>
                     <div style={{ color: MUTED }}>Pagado</div>
-                    <div style={{ fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{COP.format(changeDue.paid)}</div>
+                    <div style={{ fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{COP.format(payPreview.paid)}</div>
                   </div>
+
                   <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 10, background: "#fff" }}>
-                    <div style={{ color: MUTED }}>{changeDue.diff >= 0 ? "Cambio" : "Pendiente"}</div>
-                    <div style={{ fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>
-                      {changeDue.diff >= 0 ? COP.format(changeDue.change) : COP.format(changeDue.pending)}
-                    </div>
+                    <div style={{ color: MUTED }}>Restante</div>
+                    <div style={{ fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{COP.format(payPreview.remaining)}</div>
+                  </div>
+
+                  <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 10, background: "#fff" }}>
+                    <div style={{ color: MUTED }}>Cambio</div>
+                    <div style={{ fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{COP.format(payPreview.change)}</div>
                   </div>
                 </div>
 
@@ -1581,8 +1609,8 @@ export default function SalesPage() {
                   </button>
                   <button
                     onClick={createSale}
-                    disabled={creating || cart.length === 0}
-                    style={{ ...btnPrimary, opacity: creating || cart.length === 0 ? 0.7 : 1 }}
+                    disabled={creating || cart.length === 0 || (payPreview.due > 0 && payPreview.paid < payPreview.due)}
+                    style={{ ...btnPrimary, opacity: creating || cart.length === 0 || (payPreview.due > 0 && payPreview.paid < payPreview.due) ? 0.7 : 1 }}
                     className="btn-animate"
                   >
                     Confirmar venta

@@ -1072,7 +1072,7 @@ export default function SalesTabsPage() {
       .payCards{
         margin-top:12px;
         display:grid;
-        grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+        grid-template-columns: repeat(3, minmax(0,1fr));
         gap:12px;
       }
       @media (max-width: 780px){
@@ -1244,15 +1244,16 @@ export default function SalesTabsPage() {
     return computeTabTotalsWithInvoiceAdjust(selected, invDisc, invIva);
   }, [selected, invoiceDiscountStr, invoiceIVAStr]);
 
-  /* Pagado y cambio del modal */
+  /* Pagado, restante y cambio del modal */
   const payPreview = useMemo(() => {
     const due = Math.max(0, Math.round(toNum(selectedTotals.total, 0)));
     const paid = (payLines || []).reduce((s, ln) => {
       const amt = Math.max(0, Math.round(toNum(ln.amountStr, 0)));
       return s + amt;
     }, 0);
+    const remaining = Math.max(0, due - paid);
     const change = Math.max(0, paid - due);
-    return { due, paid, change };
+    return { due, paid, remaining, change };
   }, [payLines, selectedTotals.total]);
 
   /* Inicializa una línea de pago al abrir el modal */
@@ -1344,20 +1345,160 @@ export default function SalesTabsPage() {
     delete qtyTimers.current[itemId];
   };
 
+  /* ================= Unit conversions ================= */
+  const stockCanonical = (p: Product): number => {
+    const v =
+      p.stock_available !== undefined
+        ? toNum(p.stock_available, 0)
+        : toNum(p.stock, 0);
+    return Math.max(0, v);
+  };
+
+  const stockBaseUnit = (p: Product): number => {
+    const m = String(p.measure || "").toLowerCase();
+    const v = stockCanonical(p);
+    if (m.includes("l")) return v * 1000;
+    if (m.includes("ml")) return v;
+    if (m.includes("kg")) return v * 1000;
+    if (m.includes("g")) return v;
+    return v;
+  };
+
+  const qtyBaseUnit = (
+    qty: number,
+    unit: string | null | undefined,
+    ingredientMeasure: string | null | undefined
+  ): number => {
+    const u = String(unit || ingredientMeasure || "").toLowerCase();
+    const q = Math.max(0, toNum(qty, 0));
+    if (u.includes("l")) return q * 1000;
+    if (u.includes("ml")) return q;
+    if (u.includes("kg")) return q * 1000;
+    if (u.includes("g")) return q;
+    return q;
+  };
+
+  /* ================= Cocktail availability ================= */
+  const getRecipe = async (cocktailId: string): Promise<RecipeItem[]> => {
+    if (recipeCache.current[cocktailId]) return recipeCache.current[cocktailId];
+
+    const r = await recipeGetOnline(cocktailId);
+    if (!r.ok) {
+      recipeCache.current[cocktailId] = [];
+      return [];
+    }
+
+    const raw = Array.isArray((r as any).items)
+      ? (r as any).items
+      : Array.isArray((r as any).data)
+      ? (r as any).data
+      : [];
+    const items: RecipeItem[] = raw.map(normRecipeItem).filter(Boolean) as any;
+    recipeCache.current[cocktailId] = items;
+    return items;
+  };
+
+  const recomputeCocktailAvail = async (catalog: Product[]) => {
+    const out: Record<string, number> = {};
+    for (const p of catalog) {
+      const kind = String(p.kind || "").toUpperCase();
+      if (kind !== "COCKTAIL") continue;
+
+      const recipe = await getRecipe(p.id);
+      if (!recipe.length) {
+        out[p.id] = 0;
+        continue;
+      }
+
+      let limit = Number.POSITIVE_INFINITY;
+
+      for (const ri of recipe) {
+        const ing = productsById.get(ri.ingredient_id);
+        if (!ing) {
+          limit = 0;
+          break;
+        }
+
+        const ingStock = stockBaseUnit(ing);
+        const need = qtyBaseUnit(ri.qty, ri.unit, ri.ingredient_measure);
+
+        if (need <= 0) continue;
+
+        const max = Math.floor(ingStock / need);
+        limit = Math.min(limit, max);
+      }
+
+      out[p.id] = Number.isFinite(limit) ? Math.max(0, limit) : 0;
+    }
+    setCocktailAvail(out);
+  };
+
+  /* ================= Reservation summary ================= */
+  const loadReservedAllOpen = async () => {
+    const r = await tabsReservationsSummary("OPEN");
+    if (!r.ok) return;
+
+    const m = new Map<string, number>();
+    const items = Array.isArray((r as any).items) ? (r as any).items : [];
+    for (const it of items) {
+      const id = String((it as any).product_id || "");
+      if (!id) continue;
+      m.set(id, (m.get(id) || 0) + toNum((it as any).reserved_qty, 0));
+    }
+    setReservedAllOpen(m);
+  };
+
+  /* ================= Stock clamp helpers ================= */
+  const maxQtyForItem = (tab: Tab, item: TabItem): number => {
+    const items = tab.items || [];
+    const p = productsById.get(item.product_id);
+    if (!p) return 9999;
+
+    let totalInTab = 0;
+    for (const x of items) {
+      if (x.product_id === item.product_id) totalInTab += toNum(x.qty, 0);
+    }
+
+    const currentItemQty = toNum(item.qty, 0);
+    const otherLines = Math.max(0, totalInTab - currentItemQty);
+
+    const kind = String(p.kind || "").toUpperCase();
+    if (kind === "COCKTAIL") {
+      const base = Math.max(0, toNum(cocktailAvail[p.id], 0));
+      const maxTotal = Math.max(totalInTab, base);
+      const maxItem = Math.max(currentItemQty, Math.max(0, maxTotal - otherLines));
+      return clamp(Math.round(maxItem), 0, 9999);
+    }
+
+    const base = stockCanonical(p);
+    const reservedAll = reservedAllOpen.get(p.id) || 0;
+    const reservedOther = Math.max(0, reservedAll - totalInTab);
+    const maxTotal = Math.max(totalInTab, Math.max(0, base - reservedOther));
+    const maxItem = Math.max(currentItemQty, Math.max(0, maxTotal - otherLines));
+    return clamp(Math.round(maxItem), 0, 9999);
+  };
+
+  const clampQtyForItem = (tab: Tab, item: TabItem, desiredQty: number): number => {
+    const max = maxQtyForItem(tab, item);
+    return clamp(Math.round(toNum(desiredQty, 0)), 0, max);
+  };
+
   const setItemQtyLocal = (tabId: string, itemId: string, qty: number) => {
     patchSelected(
       (t) => {
         if (t.id !== tabId) return t;
+
+        const target = (t.items || []).find((x) => x.id === itemId) || null;
+        if (!target) return t;
+
+        const safeQty = clampQtyForItem(t, target, qty);
+
         const items = (t.items || []).map((curr) => {
           if (curr.id !== itemId) return curr;
-          const local = calcLineLocal(
-            qty,
-            curr.unit_price,
-            curr.line_discount,
-            curr.tax_rate
-          );
-          return { ...curr, qty, tax_amount: local.tax_amount, line_total: local.line_total };
+          const local = calcLineLocal(safeQty, curr.unit_price, curr.line_discount, curr.tax_rate);
+          return { ...curr, qty: safeQty, tax_amount: local.tax_amount, line_total: local.line_total };
         });
+
         return { ...t, items };
       },
       tabId
@@ -1473,109 +1614,6 @@ export default function SalesTabsPage() {
     });
   };
 
-  /* ================= Reservation summary ================= */
-  const loadReservedAllOpen = async () => {
-    const r = await tabsReservationsSummary("OPEN");
-    if (!r.ok) return;
-
-    const m = new Map<string, number>();
-    const items = Array.isArray((r as any).items) ? (r as any).items : [];
-    for (const it of items) {
-      const id = String((it as any).product_id || "");
-      if (!id) continue;
-      m.set(id, (m.get(id) || 0) + toNum((it as any).reserved_qty, 0));
-    }
-    setReservedAllOpen(m);
-  };
-
-  /* ================= Unit conversions ================= */
-  const stockCanonical = (p: Product): number => {
-    const v =
-      p.stock_available !== undefined
-        ? toNum(p.stock_available, 0)
-        : toNum(p.stock, 0);
-    return Math.max(0, v);
-  };
-
-  const stockBaseUnit = (p: Product): number => {
-    const m = String(p.measure || "").toLowerCase();
-    const v = stockCanonical(p);
-    if (m.includes("l")) return v * 1000;
-    if (m.includes("ml")) return v;
-    if (m.includes("kg")) return v * 1000;
-    if (m.includes("g")) return v;
-    return v;
-  };
-
-  const qtyBaseUnit = (
-    qty: number,
-    unit: string | null | undefined,
-    ingredientMeasure: string | null | undefined
-  ): number => {
-    const u = String(unit || ingredientMeasure || "").toLowerCase();
-    const q = Math.max(0, toNum(qty, 0));
-    if (u.includes("l")) return q * 1000;
-    if (u.includes("ml")) return q;
-    if (u.includes("kg")) return q * 1000;
-    if (u.includes("g")) return q;
-    return q;
-  };
-
-  /* ================= Cocktail availability ================= */
-  const getRecipe = async (cocktailId: string): Promise<RecipeItem[]> => {
-    if (recipeCache.current[cocktailId]) return recipeCache.current[cocktailId];
-
-    const r = await recipeGetOnline(cocktailId);
-    if (!r.ok) {
-      recipeCache.current[cocktailId] = [];
-      return [];
-    }
-
-    const raw = Array.isArray((r as any).items)
-      ? (r as any).items
-      : Array.isArray((r as any).data)
-      ? (r as any).data
-      : [];
-    const items: RecipeItem[] = raw.map(normRecipeItem).filter(Boolean) as any;
-    recipeCache.current[cocktailId] = items;
-    return items;
-  };
-
-  const recomputeCocktailAvail = async (catalog: Product[]) => {
-    const out: Record<string, number> = {};
-    for (const p of catalog) {
-      const kind = String(p.kind || "").toUpperCase();
-      if (kind !== "COCKTAIL") continue;
-
-      const recipe = await getRecipe(p.id);
-      if (!recipe.length) {
-        out[p.id] = 0;
-        continue;
-      }
-
-      let limit = Number.POSITIVE_INFINITY;
-
-      for (const ri of recipe) {
-        const ing = productsById.get(ri.ingredient_id);
-        if (!ing) {
-          limit = 0;
-          break;
-        }
-
-        const ingStock = stockBaseUnit(ing);
-        const need = qtyBaseUnit(ri.qty, ri.unit, ri.ingredient_measure);
-
-        if (need <= 0) continue;
-
-        const max = Math.floor(ingStock / need);
-        limit = Math.min(limit, max);
-      }
-
-      out[p.id] = Number.isFinite(limit) ? Math.max(0, limit) : 0;
-    }
-    setCocktailAvail(out);
-  };
-
   /* ================= Initial loads ================= */
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -1647,7 +1685,6 @@ export default function SalesTabsPage() {
     setCreateNumberStr("");
     setCreateOpen(true);
   };
-
   /* ================= Confirm actions (no browser dialogs) ================= */
   const requestOpenSlot = (slotName: string) => {
     openConfirm({
@@ -1820,7 +1857,18 @@ export default function SalesTabsPage() {
     const it = (sel.items || []).find((x) => x.id === itemId);
     if (!it) return;
 
-    const qty = clamp(Math.max(0, Math.round(toNum(nextQty, 0))), 0, 9999);
+    let qty = clamp(Math.max(0, Math.round(toNum(nextQty, 0))), 0, 9999);
+
+    /* Valida stock disponible (incluye reservas de otras mesas) */
+    const p = productsById.get(it.product_id);
+    if (p) {
+      const maxQty = maxQtyForItem(sel, it);
+      if (qty > maxQty) {
+        qty = maxQty;
+        setMsg("Stock insuficiente para la cantidad solicitada");
+      }
+    }
+
     const disc =
       nextDisc !== undefined
         ? Math.max(0, Math.round(toNum(nextDisc, 0)))
@@ -1906,7 +1954,10 @@ export default function SalesTabsPage() {
 
     const draft = qtyDrafts[itemId] ?? String(it.qty);
     const clean = String(draft || "").replace(/[^\d]/g, "");
-    const next = clamp(parseInt(clean || "0", 10) || 0, 0, 9999);
+    const parsed = clamp(parseInt(clean || "0", 10) || 0, 0, 9999);
+
+    const maxQty = maxQtyForItem(sel, it);
+    const next = clamp(parsed, 0, maxQty);
 
     lastQtySent.current[itemId] = next;
     await persistItemUpdate(tabId, itemId, next);
@@ -2146,7 +2197,6 @@ export default function SalesTabsPage() {
             </button>
           </div>
         </div>
-
         {msg ? (
           <div className="card" style={{ padding: 12, marginBottom: 12, borderColor: "rgba(239,68,68,0.30)" }}>
             <b style={{ color: "#b91c1c" }}>{msg}</b>
@@ -2307,6 +2357,7 @@ export default function SalesTabsPage() {
                               const draft = qtyDrafts[it.id] ?? String(qty);
                               const line = toNum(it.line_total, 0);
                               const tabId = selected.id;
+                              const maxQty = maxQtyForItem(selected, it);
 
                               return (
                                 <div key={it.id} className="item-row">
@@ -2342,11 +2393,11 @@ export default function SalesTabsPage() {
                                       value={draft}
                                       onChange={(e) => {
                                         const raw = String(e.target.value || "").replace(/[^\d]/g, "");
-                                        setQtyDrafts((prev) => ({ ...prev, [it.id]: raw }));
+                                        const parsed = clamp(parseInt(raw || "0", 10) || 0, 0, 9999);
+                                        const next = clamp(parsed, 0, maxQty);
 
-                                        const next = clamp(parseInt(raw || "0", 10) || 0, 0, 9999);
+                                        setQtyDrafts((prev) => ({ ...prev, [it.id]: String(next) }));
                                         setItemQtyLocal(tabId, it.id, next);
-
                                         scheduleQtyPersist(tabId, it.id, next);
                                       }}
                                       onBlur={async () => {
@@ -2364,9 +2415,10 @@ export default function SalesTabsPage() {
                                     <button
                                       className="qbtn btn-animate"
                                       type="button"
+                                      disabled={qty >= maxQty}
                                       onClick={async () => {
                                         clearQtyTimer(it.id);
-                                        const next = qty + 1;
+                                        const next = Math.min(maxQty, qty + 1);
                                         setQtyDrafts((prev) => ({ ...prev, [it.id]: String(next) }));
                                         lastQtySent.current[it.id] = next;
                                         await persistItemUpdate(tabId, it.id, next);
@@ -2622,6 +2674,7 @@ export default function SalesTabsPage() {
             </div>
           </div>
         ) : null}
+
         {/* ================= Modal Descuento / IVA ================= */}
         {discountModalItem && selected ? (
           <div
@@ -2785,92 +2838,91 @@ export default function SalesTabsPage() {
         ) : null}
 
         {/* ================= Modal Ver detalles (receta) ================= */}
-{detailModalProduct ? (
-  <div
-    style={{
-      position: "fixed",
-      inset: 0,
-      background: "rgba(0,0,0,0.35)",
-      display: "grid",
-      placeItems: "center",
-      padding: 16,
-      zIndex: 60,
-    }}
-    onMouseDown={(e) => {
-      if (e.target === e.currentTarget) {
-        setDetailModalProduct(null);
-        setDetailModalAddedAt("");
-      }
-    }}
-  >
-    <div className="card" style={{ width: "min(860px, 94vw)", padding: 16 }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 10,
-          alignItems: "center",
-        }}
-      >
-        <div>
-          <p style={{ margin: 0, fontWeight: 1000, fontSize: 16 }}>Detalles</p>
-          <p
+        {detailModalProduct ? (
+          <div
             style={{
-              margin: "4px 0 0",
-              color: MUTED,
-              fontWeight: 800,
-              fontSize: 13,
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.35)",
+              display: "grid",
+              placeItems: "center",
+              padding: 16,
+              zIndex: 60,
+            }}
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) {
+                setDetailModalProduct(null);
+                setDetailModalAddedAt("");
+              }
             }}
           >
-            {detailModalProduct.name}
-          </p>
-        </div>
+            <div className="card" style={{ width: "min(860px, 94vw)", padding: 16 }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  alignItems: "center",
+                }}
+              >
+                <div>
+                  <p style={{ margin: 0, fontWeight: 1000, fontSize: 16 }}>Detalles</p>
+                  <p
+                    style={{
+                      margin: "4px 0 0",
+                      color: MUTED,
+                      fontWeight: 800,
+                      fontSize: 13,
+                    }}
+                  >
+                    {detailModalProduct.name}
+                  </p>
+                </div>
 
-        <button
-          className="btn btn-animate"
-          type="button"
-          onClick={() => {
-            setDetailModalProduct(null);
-            setDetailModalAddedAt("");
-          }}
-        >
-          Cerrar
-        </button>
-      </div>
+                <button
+                  className="btn btn-animate"
+                  type="button"
+                  onClick={() => {
+                    setDetailModalProduct(null);
+                    setDetailModalAddedAt("");
+                  }}
+                >
+                  Cerrar
+                </button>
+              </div>
 
-      {detailModalAddedAt ? (
-        <div style={{ marginTop: 14 }}>
-          <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>
-            Agregado
-          </p>
-          <div className="pill">{fmtDateTimeDMY(detailModalAddedAt)}</div>
-        </div>
-      ) : null}
+              {detailModalAddedAt ? (
+                <div style={{ marginTop: 14 }}>
+                  <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>
+                    Agregado
+                  </p>
+                  <div className="pill">{fmtDateTimeDMY(detailModalAddedAt)}</div>
+                </div>
+              ) : null}
 
-      <div style={{ marginTop: 14 }}>
-        <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>
-          Categoría
-        </p>
-        <div className="pill">{detailModalProduct.category}</div>
-      </div>
+              <div style={{ marginTop: 14 }}>
+                <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>
+                  Categoría
+                </p>
+                <div className="pill">{detailModalProduct.category}</div>
+              </div>
 
-      <div style={{ marginTop: 12 }}>
-        <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>
-          Precio
-        </p>
-        <div className="pill">{COP.format(toNum(detailModalProduct.price, 0))}</div>
-      </div>
+              <div style={{ marginTop: 12 }}>
+                <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>
+                  Precio
+                </p>
+                <div className="pill">{COP.format(toNum(detailModalProduct.price, 0))}</div>
+              </div>
 
-      <div style={{ marginTop: 12 }}>
-        <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>
-          Receta (si aplica)
-        </p>
-        <RecipeInline product={detailModalProduct} getRecipe={getRecipe} productsById={productsById} />
-      </div>
-    </div>
-  </div>
-) : null}
-
+              <div style={{ marginTop: 12 }}>
+                <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>
+                  Receta (si aplica)
+                </p>
+                <RecipeInline product={detailModalProduct} getRecipe={getRecipe} productsById={productsById} />
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {/* ================= Modal cerrar venta ================= */}
         {confirmSaleOpen && selected ? (
@@ -3013,7 +3065,9 @@ export default function SalesTabsPage() {
                     className="btn btn-animate"
                     type="button"
                     onClick={() => {
-                      setPayLines((prev) => [...prev, makePayLine()]);
+                      const remaining = Math.max(0, payPreview.due - payPreview.paid);
+                      const amountStr = remaining > 0 ? String(remaining) : "";
+                      setPayLines((prev) => [...prev, makePayLine({ amountStr })]);
                     }}
                   >
                     Añadir pago
@@ -3037,6 +3091,13 @@ export default function SalesTabsPage() {
                   <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>Pagado</p>
                   <div style={{ margin: 0, fontWeight: 1000, fontSize: 16 }}>
                     {COP.format(payPreview.paid)}
+                  </div>
+                </div>
+
+                <div className="card" style={{ padding: 12 }}>
+                  <p style={{ margin: "0 0 6px", color: MUTED, fontWeight: 900, fontSize: 12 }}>Restante</p>
+                  <div style={{ margin: 0, fontWeight: 1000, fontSize: 16 }}>
+                    {COP.format(payPreview.remaining)}
                   </div>
                 </div>
 
@@ -3078,6 +3139,7 @@ export default function SalesTabsPage() {
                 <button
                   className="btn btn-primary btn-animate"
                   type="button"
+                  disabled={payPreview.paid < payPreview.due}
                   onClick={async () => {
                     if (!selected) return;
 
@@ -3090,8 +3152,15 @@ export default function SalesTabsPage() {
                     });
 
                     const payTotal = normalized.reduce((s, p) => s + Math.max(0, toNum(p.amount, 0)), 0);
-                    if (payTotal <= 0) {
+                    const due = Math.max(0, Math.round(toNum(selectedTotals.total, 0)));
+
+                    if (due > 0 && payTotal <= 0) {
                       setMsg("El total pagado debe ser mayor a 0");
+                      return;
+                    }
+
+                    if (due > 0 && payTotal < due) {
+                      setMsg(`Faltan ${COP.format(due - payTotal)} para completar el pago`);
                       return;
                     }
 
@@ -3159,38 +3228,35 @@ export default function SalesTabsPage() {
                     });
 
                     // Calcula totales requeridos por backend
-const subtotal = items.reduce((acc: number, it: any) => {
-  const qty = Number(it.qty || 0);
-  const unit = Number(it.unit_price ?? it.unitPrice ?? it.price ?? 0);
-  return acc + qty * unit;
-}, 0);
+                    const subtotal = items.reduce((acc: number, it: any) => {
+                      const qty = Number(it.qty || 0);
+                      const unit = Number(it.unit_price ?? it.unitPrice ?? it.price ?? 0);
+                      return acc + qty * unit;
+                    }, 0);
 
-const discount_total = items.reduce((acc: number, it: any) => {
-  return acc + Number(it.line_discount ?? it.lineDiscount ?? 0);
-}, 0);
+                    const discount_total = items.reduce((acc: number, it: any) => {
+                      return acc + Number(it.line_discount ?? it.lineDiscount ?? 0);
+                    }, 0);
 
-const tax_total = items.reduce((acc: number, it: any) => {
-  return acc + Number(it.tax ?? 0);
-}, 0);
+                    const tax_total = items.reduce((acc: number, it: any) => {
+                      return acc + Number(it.tax ?? 0);
+                    }, 0);
 
-const total = subtotal - discount_total + tax_total;
+                    const total = subtotal - discount_total + tax_total;
 
-
-                   const payload = {
-                    status: "COMPLETED",
-                    client: selected.name,
-                    tab_id: selected.id,
-                    tab_name: selected.name,
-                    notes: saleNotes || "",
-                    subtotal: Math.round(subtotal),
-                    discount_total: Math.round(discount_total),
-                    tax_total: Math.round(tax_total),
-                     total: Math.round(total),
-                     items: items,
-                    payments,
-                             };
-
-
+                    const payload = {
+                      status: "COMPLETED",
+                      client: selected.name,
+                      tab_id: selected.id,
+                      tab_name: selected.name,
+                      notes: saleNotes || "",
+                      subtotal: Math.round(subtotal),
+                      discount_total: Math.round(discount_total),
+                      tax_total: Math.round(tax_total),
+                      total: Math.round(total),
+                      items: items,
+                      payments,
+                    };
 
                     const r = await salesCreateOnline(payload);
                     if (!r.ok) {
@@ -3422,7 +3488,6 @@ function RecipeInline({
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<RecipeItem[]>([]);
   const kind = String(product.kind || "").toUpperCase();
-
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {

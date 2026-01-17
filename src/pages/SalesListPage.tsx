@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { fmtDateTimeCO, todayStrCO } from "../lib/datetime";
 
@@ -135,6 +135,50 @@ function isoCO(dateStr: string, timeStr: string, end: boolean) {
 function msFromIso(iso: string) {
   const ms = new Date(String(iso || "")).getTime();
   return Number.isFinite(ms) ? ms : null;
+}
+
+function parseAnyDateMs(v: any): number | null {
+  if (!v) return null;
+  if (v instanceof Date) {
+    const ms = v.getTime();
+    return Number.isNaN(ms) ? null : ms;
+  }
+  if (typeof v !== "string") return null;
+
+  const s = v.trim();
+  if (!s) return null;
+
+  const d0 = new Date(s);
+  const ms0 = d0.getTime();
+  if (!Number.isNaN(ms0)) return ms0;
+
+  const m1 = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (m1) {
+    const yy = parseInt(m1[1], 10);
+    const mm = parseInt(m1[2], 10);
+    const dd = parseInt(m1[3], 10);
+    const HH = parseInt(m1[4], 10);
+    const MM = parseInt(m1[5], 10);
+    const SS = parseInt(m1[6] || "0", 10);
+    const d = new Date(yy, mm - 1, dd, HH, MM, SS);
+    const ms = d.getTime();
+    return Number.isNaN(ms) ? null : ms;
+  }
+
+  const m2 = s.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (m2) {
+    const dd = parseInt(m2[1], 10);
+    const mm = parseInt(m2[2], 10);
+    const yy = parseInt(m2[3], 10);
+    const HH = parseInt(m2[4] || "0", 10);
+    const MM = parseInt(m2[5] || "0", 10);
+    const SS = parseInt(m2[6] || "0", 10);
+    const d = new Date(yy, mm - 1, dd, HH, MM, SS);
+    const ms = d.getTime();
+    return Number.isNaN(ms) ? null : ms;
+  }
+
+  return null;
 }
 
 /* Lectura robusta de JWT en storage */
@@ -332,21 +376,39 @@ function normalizeReturn(raw: any, saleId: ID): SaleReturn {
 }
 
 /* ================= Formatos ================= */
-const fmtDateTimeCO12 = (s: string) => {
+const fmtDateTimeCO12 = (input: string) => {
+  /* Formatea fecha y hora a 12h (a.m./p.m.) en zona America/Bogota */
   try {
-    const re = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?$/;
-    if (!re.test(String(s))) return fmtDateTimeCO(s as any);
-    const y = s.slice(0, 4);
-    const m = s.slice(5, 7);
-    const d = s.slice(8, 10);
-    const HH = parseInt(s.slice(11, 13), 10);
-    const mm = s.slice(14, 16);
-    const am = HH < 12;
-    let h12 = HH % 12;
-    if (h12 === 0) h12 = 12;
-    return `${d}/${m}/${y} ${h12}:${mm} ${am ? "a.m." : "p.m."}`;
+    const ms = parseAnyDateMs(input);
+    if (ms == null) return fmtDateTimeCO(input as any);
+
+    const dtf = new Intl.DateTimeFormat("es-CO", {
+      timeZone: "America/Bogota",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+
+    const parts = dtf.formatToParts(new Date(ms));
+    const get = (type: string) => parts.find((p) => p.type === type)?.value || "";
+
+    const dd = get("day");
+    const mo = get("month");
+    const yy = get("year");
+    const hh = get("hour");
+    const mm = get("minute");
+    const dpRaw = get("dayPeriod");
+
+    let dp = String(dpRaw || "").toLowerCase().replace(/\s+/g, "");
+    if (dp.startsWith("a")) dp = "a.m.";
+    else if (dp.startsWith("p")) dp = "p.m.";
+
+    return `${dd}/${mo}/${yy} ${hh}:${mm} ${dp}`;
   } catch {
-    return fmtDateTimeCO(s as any);
+    return fmtDateTimeCO(input as any);
   }
 };
 
@@ -390,6 +452,7 @@ const statusLabel = (s: SaleStatus | string) => {
       return String(s);
   }
 };
+
 
 const statusColorOf = (st: SaleStatus) =>
   st === "COMPLETED"
@@ -597,11 +660,10 @@ const localCss = `
   .list-grid{
     display:grid;
     grid-template-columns:
-      minmax(140px,9fr)
-      minmax(0,1.2fr)
-      minmax(100px,7fr)
-      minmax(130px,8fr);
-    gap:10px; align-items:center; min-width:0;
+      minmax(160px, 190px)
+      minmax(0, 1fr)
+      minmax(120px, 150px);
+    gap:14px; align-items:center; min-width:0;
   }
   .list-grid>*{ min-width:0; }
 
@@ -693,6 +755,8 @@ export default function SalesListPage() {
   const [q, setQ] = useState("");
   const [from, setFrom] = useState<string>(todayStrCO());
   const [to, setTo] = useState<string>(todayStrCO());
+  const [fromTime, setFromTime] = useState<string>("00:00");
+  const [toTime, setToTime] = useState<string>("23:59");
   const [status, setStatus] = useState<"" | SaleStatus>("");
 
   /* Listado */
@@ -775,33 +839,27 @@ export default function SalesListPage() {
     })();
   }, [navigate]);
 
-  /* Cargar listado */
-  useEffect(() => {
-    if (!loading) loadList();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, from, to, status]);
-
-  async function loadList() {
+  /* Cargar listado (reactivo) */
+  const loadList = useCallback(async () => {
     setListLoading(true);
     setListErr("");
 
     try {
-      const startIso = from ? isoCO(from, "00:00", false) : "";
-      const endIso = to ? isoCO(to, "23:59", true) : "";
+      const startIso = from ? isoCO(from, fromTime || "00:00", false) : "";
+      const endIso = to ? isoCO(to, toTime || "23:59", true) : "";
 
       let fixedStart: string | undefined = startIso || undefined;
       let fixedEnd: string | undefined = endIso || undefined;
-
       const startMs = startIso ? msFromIso(startIso) : null;
       const endMs = endIso ? msFromIso(endIso) : null;
 
       if (startMs != null && endMs != null && endMs < startMs) {
-        fixedStart = endIso || undefined;
-        fixedEnd = startIso || undefined;
+        const tmp = fixedStart;
+        fixedStart = fixedEnd;
+        fixedEnd = tmp;
       }
 
       const payload: any = {
-        q: q.trim() || undefined,
         start: fixedStart,
         end: fixedEnd,
         status: status || undefined,
@@ -845,7 +903,17 @@ export default function SalesListPage() {
     } finally {
       setListLoading(false);
     }
-  }
+  }, [from, fromTime, status, to, toTime]);
+
+  useEffect(() => {
+    if (loading) return;
+
+    const t = window.setTimeout(() => {
+      loadList();
+    }, 250);
+
+    return () => window.clearTimeout(t);
+  }, [loading, from, to, fromTime, toTime, status, loadList]);
 
   async function selectSale(id: ID) {
     setSelectedId(id);
@@ -906,16 +974,40 @@ export default function SalesListPage() {
     }
   }
 
-  /* Filtrado en cliente: solo búsqueda */
+  /* Filtrado reactivo (búsqueda + rango fecha/hora) */
   const visibleItems = useMemo(() => {
     const ql = q.trim().toLowerCase();
-    if (!ql) return items;
+
+    const startIso = from ? isoCO(from, fromTime || "00:00", false) : "";
+    const endIso = to ? isoCO(to, toTime || "23:59", true) : "";
+
+    let startMs = startIso ? msFromIso(startIso) : null;
+    let endMs = endIso ? msFromIso(endIso) : null;
+
+    if (startMs != null && endMs != null && endMs < startMs) {
+      const tmp = startMs;
+      startMs = endMs;
+      endMs = tmp;
+    }
 
     return items.filter((s) => {
-      const hay = [s.client || "", s.notes || "", String(s.id || ""), statusLabel(s.status)].join(" ").toLowerCase();
-      return hay.includes(ql);
+      if (ql) {
+        const hay = [s.client || "", s.notes || "", String(s.id || ""), statusLabel(s.status)]
+          .join(" ")
+          .toLowerCase();
+        if (!hay.includes(ql)) return false;
+      }
+
+      if (startMs == null && endMs == null) return true;
+
+      const ms = parseAnyDateMs(s.created_at);
+      if (ms == null) return true;
+
+      if (startMs != null && ms < startMs) return false;
+      if (endMs != null && ms > endMs) return false;
+      return true;
     });
-  }, [items, q]);
+  }, [items, q, from, to, fromTime, toTime]);
 
   /* Mantener seleccionada una venta válida */
   useEffect(() => {
@@ -1121,15 +1213,15 @@ export default function SalesListPage() {
                 placeholder="Buscar (cliente, notas)…"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") loadList();
-                }}
                 style={inputWithIcon}
               />
             </div>
 
-            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} style={input} />
-            <input type="date" value={to} onChange={(e) => setTo(e.target.value)} style={input} />
+            <div style={{ display: "grid", gap: 4, alignContent: "start" }}><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} style={input} /><div style={{ fontSize: 12, color: MUTED, paddingLeft: 2 }}>Desde</div></div>
+            <div style={{ display: "grid", gap: 4, alignContent: "start" }}><input type="date" value={to} onChange={(e) => setTo(e.target.value)} style={input} /><div style={{ fontSize: 12, color: MUTED, paddingLeft: 2 }}>Hasta</div></div>
+
+            <div style={{ display: "grid", gap: 4, alignContent: "start" }}><input type="time" value={fromTime} onChange={(e) => setFromTime(e.target.value)} style={input} /><div style={{ fontSize: 12, color: MUTED, paddingLeft: 2 }}>Desde</div></div>
+            <div style={{ display: "grid", gap: 4, alignContent: "start" }}><input type="time" value={toTime} onChange={(e) => setToTime(e.target.value)} style={input} /><div style={{ fontSize: 12, color: MUTED, paddingLeft: 2 }}>Hasta</div></div>
 
             <select value={status} onChange={(e) => setStatus(e.target.value as any)} style={input}>
               <option value="">Todos</option>
@@ -1138,10 +1230,6 @@ export default function SalesListPage() {
               <option value="REFUNDED">Reembolsados</option>
               <option value="VOIDED">Anulados</option>
             </select>
-
-            <button onClick={loadList} style={btnSoft} className="btn-animate">
-              Buscar
-            </button>
           </div>
 
           <div className="sales-grid">
@@ -1155,9 +1243,7 @@ export default function SalesListPage() {
                   <div className="hdr-nowrap" style={{ textAlign: "right" }}>
                     Total
                   </div>
-                  <div className="hdr-nowrap" style={{ textAlign: "right" }}>
-                    Estado
-                  </div>
+                  
                 </div>
               </div>
 
@@ -1169,7 +1255,6 @@ export default function SalesListPage() {
                 ) : (
                   visibleItems.map((s) => {
                     const active = selectedId != null && String(selectedId) === String(s.id);
-                    const color = statusColorOf(s.status);
                     return (
                       <div
                         key={String(s.id)}
@@ -1188,21 +1273,6 @@ export default function SalesListPage() {
                             </div>
                           </div>
                           <div style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{COP.format(s.total)}</div>
-                          <div style={{ textAlign: "right" }}>
-                            <span
-                              style={{
-                                padding: "2px 10px",
-                                borderRadius: 999,
-                                border: "1px solid #e5e7eb",
-                                color,
-                                background: "#fff",
-                                fontSize: 12,
-                                fontWeight: 700,
-                              }}
-                            >
-                              {statusLabel(s.status)}
-                            </span>
-                          </div>
                         </div>
                       </div>
                     );

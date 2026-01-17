@@ -469,12 +469,12 @@ export default function SalesTabsPage() {
   const nav = useNavigate();
 
   /* ================= UI state ================= */
-  const [me, setMe] = useState<Me>(null);
+  const [, setMe] = useState<Me>(null);
   const [uiView, setUiView] = useState<UiView>("MAP");
   const [placeType, setPlaceType] = useState<PlaceType>("MESA");
 
   const [loading, setLoading] = useState(false);
-  const [loadingOne, setLoadingOne] = useState(false);
+  const [, setLoadingOne] = useState(false);
   const [loadingProducts, setLoadingProducts] = useState(false);
 
   const [msg, setMsg] = useState<string>("");

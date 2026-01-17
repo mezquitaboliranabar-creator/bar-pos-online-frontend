@@ -481,7 +481,7 @@ export default function SalesPage() {
   const { narrow } = useBreakpoints();
   const navigate = useNavigate();
 
-  const [me, setMe] = useState<Me>(null);
+  const [, setMe] = useState<Me>(null);
   const [loading, setLoading] = useState(true);
 
   const [q, setQ] = useState("");

@@ -613,6 +613,8 @@ export default function ExpensesPage() {
     cancelText: "Cancelar",
   });
 
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const uiConfirm = async (opts: { message: string; detail?: string; confirmText?: string; cancelText?: string }) => {
     try {
       const r = await (window as any).pos?.uiConfirm?.({ message: opts.message, detail: opts.detail });

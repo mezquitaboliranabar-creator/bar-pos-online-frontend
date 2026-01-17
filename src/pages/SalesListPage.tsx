@@ -201,12 +201,6 @@ const readToken = () => {
   return "";
 };
 
-const writeToken = (t: string) => {
-  const token = normalizeToken(t);
-  if (!token) return;
-  localStorage.setItem("authToken", token);
-};
-
 const clearToken = () => {
   localStorage.removeItem("authToken");
   localStorage.removeItem("token");

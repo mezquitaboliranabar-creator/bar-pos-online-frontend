@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/exhaustive-deps */
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -255,10 +256,6 @@ const tabsDeleteOnline = (tabId: string) =>
 /* Crea venta real en BD */
 const salesCreateOnline = (payload: any) =>
   httpJSON("POST", "/api/sales", payload, { auth: true });
-
-/* Mantener si aún lo usas en otra parte */
-const salesCreateWithRecipesOnline = (payload: any) =>
-  httpJSON("POST", "/api/sales/with-recipes", payload, { auth: true });
 
 /* =============== Helpers =============== */
 const COP = new Intl.NumberFormat("es-CO", {
@@ -1259,6 +1256,7 @@ export default function SalesTabsPage() {
   }, [payLines, selectedTotals.total]);
 
   /* Inicializa una línea de pago al abrir el modal */
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!confirmSaleOpen) return;
     setPayLines((prev) => {
@@ -1269,6 +1267,7 @@ export default function SalesTabsPage() {
     });
   }, [confirmSaleOpen, selectedTotals.total]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     setInvoiceAdjOpen(false);
     setInvoiceDiscountStr("0");
@@ -1366,6 +1365,7 @@ export default function SalesTabsPage() {
   };
 
   /* ================= Auth bootstrap ================= */
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const t = getToken();
     if (!t) {
@@ -1577,6 +1577,7 @@ export default function SalesTabsPage() {
   };
 
   /* ================= Initial loads ================= */
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -1591,6 +1592,7 @@ export default function SalesTabsPage() {
     };
   }, []);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const catalog = products.filter(isAllowedForCatalog);
     if (!catalog.length) return;
@@ -3421,6 +3423,8 @@ function RecipeInline({
   const [items, setItems] = useState<RecipeItem[]>([]);
   const kind = String(product.kind || "").toUpperCase();
 
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     let alive = true;
     (async () => {

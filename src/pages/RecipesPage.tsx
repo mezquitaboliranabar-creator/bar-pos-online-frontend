@@ -1249,7 +1249,7 @@ export default function RecipesPage() {
                                 onChange={(e) =>
                                   updRecipeLine(idx, {
                                     qty: e.currentTarget.value
-                                      .replace(/[^\d.,\-]/g, "")
+                                      .replace(/[^\d.,-]/g, "")
                                       .replace(",", "."),
                                   })
                                 }
